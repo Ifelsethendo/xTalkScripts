@@ -1,0 +1,2286 @@
+local AICrashLimit
+local xDir=0
+local yDir=0
+local bIsplaying=false
+local lastKey
+local speed
+local lastXDir
+local lastYDir
+local lastX
+local lastY
+local playerXY
+local oldXY
+local increments=0
+local trailKeys=0
+local skipStep=0
+
+local enemyNumber=01
+local enemyTurn=0
+local enemyIncrements=0
+local enemyPoints
+local enemyX
+local enemyY
+global enemyXY
+local enemyLastXY
+global EnemyTrailPreset
+
+local lastChangeLine=0
+global  EnemyVectorLineNumber
+
+
+local trailDelay=0
+local dir
+local KeyLineLimit
+
+local lastPlayerX,lastPlayerY
+local playerDir
+local enemyTrailCount
+local bFreeRoam=false
+local vXvYData
+local lastPlayerSeconds -- last time player was updated
+
+global EnemyLaserWallPoints
+global EnemyTrailNumber
+global startX,startY
+global playerVectorIncrements
+global playerVectorLoops
+global gPassed -- time between now and lastSeconds tested
+global enemyLoopPosition
+global gGameTurn
+global gGridWidth  -- number of units in the grid
+global gGridHeight  -- number of units in the grid
+global gGridDivX --- number to divided width by to get gGridWidth
+global gGridDivY --- number to divided width by to get gGridHeight
+global bPaused
+global centerX,centerY
+global gGameRound
+global gridX
+global gridY
+global gCurrentPropertyVariable
+global reviewStart,reviewEnd
+--- status field stuff
+global posText, playerTrailLength, playerCornerCount
+global CurrentRunLine  --- current line of vector data for enemy 
+global CurrentRunLoop   --- current loop of CurrentRunLine vector data for enemy 
+
+on init.Globals
+   put 0 into gGameRound --- new round after death, just like in real life
+   put 0 into  gGameTurn  --- each turn of the game loop
+   put 64 into gGridDivX  --- game grid area divisions
+   put 64 into gGridDivY --- game grid area divisions
+   put 0 into gridX    --- grid position of the player round(x/gGridDivX) for instance
+   put 0 into gridY  --- grid position of the player
+   put floor(width of graphic "GameGrid"/gGridDivX) into  gGridWidth  --- width of a grid unit
+   put  floor(height of graphic "GameGrid"/gGridDivY) into  gGridHeight --- height of a grid unit
+   
+   put 1 into enemyLoopPosition --- progress in vector loop
+   put "" into EnemyLaserWallPoints  --- the points of the laser wall
+   put 0 into EnemyTrailNumber    --- << I dunno, the vector data array line number?
+   put true into bIsplaying   --- pause/pass game.loop
+   put  0 into gPassed  -- milliseconds passed
+   put "" into posText
+   put 0 into  playerTrailLength  --- length of player trail
+   put 0 into  playerCornerCount    --- number of times player has turned
+   
+   put "" into playerVectorIncrements 
+   put 1 into playerVectorLoops
+   put item 1 the loc of graphic "GameGrid" into centerX
+   put item 2 the loc of graphic "GameGrid" into centerY
+   put centerX into startX
+   put centerY into startY
+   put 1 into reviewStart
+   put -1 into reviewEnd 
+   put 1 into EnemyVectorLineNumber --- current line number of list of vectors
+   put "" into gCurrentPropertyVariable
+   put 1 into CurrentRunLine
+   put 0 into CurrentRunLoop
+end init.Globals
+
+
+
+
+function CenterScreen
+   put the height of this card into H
+   put the width of this card into W
+   return floor(W/2),floor(H/2)
+end CenterScreen
+
+function CheckChangesCollision
+   if EnemyLaserWallPoints is empty then return false
+   repeat for each line L in EnemyLaserWallPoints
+      if number of items of L < 2 then next Repeat
+      if L is within the rect of graphic "Sensor" then return true
+   end repeat
+   return false
+end CheckChangesCollision
+
+function CheckObjectLineCollision tSensor,tLineObject
+   --- don't die on your own line spawn or corner point
+   put line 1 to -1 of the points of graphic tLineObject into tPoints
+   if tPoints is empty then return false
+   put 0 into N
+   repeat for each line L in tPoints
+      add 1 to N
+      if number of items of L < 2 then next Repeat
+      if L is within the rect of graphic tSensor then
+         if N < 6 then next repeat 
+         --put "Collision at line:" && N 
+         return true
+      end if
+   end repeat
+   return false
+end CheckObjectLineCollision
+
+function CollisionBorder tObject,borderObj
+   put the loc of graphic tObject into xy
+   put item 1 of xy into x
+   put item 2 of xy into y
+   if x < 1 or x > the width of this stack then return true
+   if y < 1 or y > the height of this stack then return true
+   if x < left of graphic borderObj or x > right of graphic borderObj then return true
+   if y < top of graphic borderObj or y > bottom of graphic borderObj then return true
+   return false
+end CollisionBorder
+
+on GameObject.CollisionCheckRectVsPoints tGraphicWithRect,tGraphicWithPoints
+   put the rect of graphic tGraphicWithRect into tRect
+   put the points of  graphic tGraphicWithPoints into tPoints
+   filter tPoints without empty
+   repeat for each line L in tPoints
+      if L is within tRect then
+         --- Do Something here !!
+      end if
+   end repeat
+end  GameObject.CollisionCheckRectVsPoints
+
+on GameObject.RectVSRect tGraphic1,tGraphic2
+   put the rect of graphic tGraphic1 into tRect1
+   put the rect of graphic tGraphic2 into tRect2
+   if topLeft of graphic tGraphic1 is within tRect2 or topRight of graphic tGraphic1 is within tRect2  then put true into bCollision
+   if  bottomRight of graphic tGraphic1 is within tRect2 or bottomLeft of graphic tGraphic1 is within tRect2 then put true into bCollision
+   if bCollision is true then
+      --- Do Something here !!
+   end if
+end  GameObject.RectVSRect
+
+
+
+on Turn.UI
+   put "Round:" && gGameRound  & cr into tStatusText
+   put "Turn:" && gGameTurn & cr after tStatusText
+   put "XY:" && posText & cr after tStatusText
+   put "Grid:" & gridX,gridY & cr  after tStatusText
+   put "Length:" &&  playerTrailLength  & cr after tStatusText
+   put "Corners:" && playerCornerCount after tStatusText
+   put tStatusText into field "StatusField"
+end Turn.UI
+
+
+on Turn.Player
+   if the tool is "pointer tool" or bIsPlaying is false then 
+      put false into bIsPlaying
+      exit Turn.Player
+   end if
+   put the milliseconds into CurrentSeconds
+   put  lastPlayerSeconds into lastSeconds
+   put CurrentSeconds-lastPlayerSeconds into gPassed
+   
+   --add 1 to increments
+   put the loc of graphic "playerBike" into playerXY
+   put item 1 of playerXY into lastPlayerX
+   put item 2 of playerXY into lastPlayerY
+   
+   put playerXY into oldXY
+   add xDir*(gGridWidth) to item 1 of playerXY
+   add yDir*(gGridHeight) to item 2 of playerXY
+   --put oldXY & cr & xDir,yDir
+   
+   --- view grid coordinates
+   put 1+(floor((item 1 of playerXY-left of graphic "GameGrid")/gGridDivX)) into gridX
+   put (floor(item 2 of playerXY/gGridDivY)) into gridY
+   put playerXY into PosText 
+   
+   
+   --- update player graphic positions
+   
+   
+   set the loc of graphic "PlayerBike" to playerXY
+   set the layer of graphic "PlayerBike" to top
+   --- DEPRECATE? PlaceSensor "playerMarker",PlayerDir  --- sensor maybe redundant now 02-21-2024
+   GameObject.updateLaserWall "Player"
+   
+   put the milliseconds into lastPlayerSeconds
+   --- don't crash at spawn point
+   if number of lines of the points of graphic "playerLaserWall" > 8 then
+      --- check player collision
+      -- CheckObjectLineCollision("PlayerMarkerFrontSensor","PlayerLaserWall")
+      if CheckObjectLineCollision("PlayerBike","PlayerLaserWall") is true then
+         Game.PlayerCrashed "Trail"
+         exit Turn.Player
+      end if
+      
+      if CollisionBorder("PlayerBike","Gamegrid") is true then
+         Game.PlayerCrashed "Border"
+         exit Turn.Player
+      end if
+   end if
+   
+   -- update wall after collision detection to avoid getting hung up on own TURNS
+   
+end Turn.Player
+
+
+function CompareCurVsLastPos tObject,LX,LY
+   put item 1 of the loc of graphic tObject into curX
+   put item 2 of the loc of graphic tObject into curY
+   if curX-LX > 0 then put "right" into Dir
+   if curX-LX < 0 then put "left" into Dir
+   if curY-LY > 0 then put "down" into Dir
+   if curY-LY < 0 then put "up" into Dir
+   return Dir
+end CompareCurVsLastPos
+
+on GameObject.updateLaserWall tName
+   put item 1 of oldXY into wX
+   put item 2 of oldXY into wY
+   put the points of graphic (tName & "LaserWall") into tWallPoints
+   --- check for continous line and extend it rather than make new points
+   put line 2 of tWallPoints into tCheck
+   put false into bContinousLine
+   
+   --- traveling along same X
+   if wx = item 1 of tCheck  then 
+      add 1 to playerVectorLoops
+      put wy into item 2 of line 1 of tWallPoints
+      put true into bContinousLine
+   end if
+   
+   --- traveling along same Y
+   if wy = item 2 of tCheck   then 
+      add 1 to playerVectorLoops
+      put wx into item 1 of line 1 of tWallPoints
+      put true into bContinousLine
+   end if
+   
+   --- set a marker point at every half step of wall to collide with
+   if abs(wx - item 1 of tcheck) > (gGridWidth/2) or abs(wy - item 2 of tcheck) > (gGridHeight/2) then put false into bContinousLine
+   
+   --- this sets up points along the wall but does not mean a turn occured
+   if bContinousLine is false then
+      --- record the vectors and loop count
+      put line 1 of playerVectorIncrements into VXY
+      if item 1 of VXY = xDir and item 2 of VXY = yDir then
+         --- the vector is same as last time then update loop count in place
+         put xDir & comma & yDir & comma & playerVectorLoops into line 1 of playerVectorIncrements
+      else
+         --- if a turn was made then update list with a new line
+         put xDir & comma & yDir & comma & playerVectorLoops &cr before playerVectorIncrements
+      end if
+      put wx &comma & wy & cr before tWallPoints
+   end if
+   put the loc of graphic "PlayerBike" & cr before tWallPoints
+   UI.DrawLaserWall tName,tWallPoints
+   add 1 playerTrailLength
+end GameObject.updateLaserWall
+
+on UI.DrawLaserWall tName,tPoints
+   set the points of graphic (tName & "LaserWall") to tPoints
+end UI.DrawLaserWall
+
+--- draw red vs. blue, player vs. enemy, etc
+on UI.DrawTeamGraphic tArrayIndexLabel,tUnit,tTeam
+   set the customPropertySet of this card to GraphicData
+   put the PointsImageLibrary of this card into tPointsArray
+   put tPointsArray[tArrayIndexLabel] into tPoints
+   put tTeam & tUnit into tName    --- ie Player1, Enemy10, Bullet11 etc
+   set the points of graphic tName to tPoints
+   set the customPropertySet of this card to empty
+end UI.DrawTeamGraphic
+
+on KeyUp
+   put "" into lastKey
+end KeyUp
+
+on KeyDown tkey
+   
+   if tKey is lastKey then
+      --      put speed+1 into speed
+      --      if speed > 2 then put 2 into speed
+      exit keyDown
+   end if
+   put 1 into speed
+   switch tKey
+      case "p"
+      case space
+         put "" into lastKey
+         toggle.PlayMode
+         exit keyDown
+         break
+   end switch
+   
+   if xDir <> 0 then
+      switch tKey
+         case "W"
+            put 0 into xDir
+            put -1*speed into yDir
+            set the angle of graphic "Playerbike" to 30
+            put "up" into playerDir
+            add 1 to playerCornerCount
+            put 1 into  playerVectorLoops
+            break
+         case "S"  
+            put 0 into xDir
+            put 1*speed into yDir
+            set the angle of graphic "Playerbike" to 90
+            put "down" into playerDir
+            add 1 to playerCornerCount
+            put 1 into  playerVectorLoops
+            break
+      end switch
+      put tkEy into lastKey
+      put true into bIsPlaying
+   else
+      switch tKey
+         case "A"
+            put -1*speed into xDir
+            put 0 into yDir
+            set the angle of graphic "Playerbike" to 180
+            put "left" into playerDir
+            add 1 to playerCornerCount
+            put 1 into  playerVectorLoops
+            break
+         case "D"
+            put 1*speed into xDir
+            put 0 into yDir
+            set the angle of graphic "Playerbike" to 0
+            put "right" into playerDir
+            add 1 to playerCornerCount
+            put 1 into  playerVectorLoops
+            break
+      end switch
+      put tkEy into lastKey
+      put true into bIsPlaying
+   end if
+end KeyDown
+
+
+
+on Toggle.PlayMode
+   put not bIsplaying into bIsplaying
+   if bIsplaying is true then Game.ValidatePlaying
+end Toggle.PlayMode
+
+on Game.StopTrainer
+   put false into bIsPlaying
+   RecordGraphicTrail "Player"
+end Game.stopTrainer
+
+on Game.PlayerCrashed
+   put false into bIsPlaying
+   RecordGraphicTrail "Player"
+   wait 1 milliseconds
+   if Game.isValid() then Game.startTrainer
+end Game.PlayerCrashed
+
+on RandomStartingPos
+   put the height of graphic "GameGrid"  into H
+   put the width of graphic "GameGrid"  into W
+   put the loc of graphic "GameGrid" into GGXY
+   put item 1 of GGXY into GGX
+   put item 2  of GGXY into GGY
+   set the randomSeed to the seconds-random(the seconds)
+   put random(4) into rStart
+   switch rStart
+      case 1  --- left
+         put left of graphic "gameGrid"+150 into startX
+         put GGY into startY
+         put "right" into playerDir
+         break
+      case 2 --- top
+         put GGX into startX
+         put 150 into startY
+         put "down" into playerDir
+         break
+      case 3 --- right
+         put H-150 into startX
+         put GGY into startY
+         put "left" into playerDir
+         break
+      case 4 --- bottom
+         put GGX into startX
+         put H-150 into startY
+         put "up" into playerDir
+         break
+   end switch
+end RandomStartingPos
+
+on init.PlayerBike
+   set the loc of graphic "PlayerLaserWall" to startX,startY
+   set the points of graphic "PlayerLaserWall" to startX,startY 
+   --DEPRECATE--set the loc of graphic "PlayerMarker" to startX,startY
+   set the loc of graphic "PlayerBike" to startX,startY
+   put 1 into speed
+   put 0 into xDir
+   put -1*speed into yDir
+   set the angle of graphic "Playerbike" to 30
+   put "up" into playerDir
+   add 1 to playerCornerCount
+   --- DEPRECATE? PlaceSensor "playerMarker",PlayerDir
+   keydown "W"
+end init.PlayerBike
+
+on Game.NextRound
+   RandomStartingPos
+   DirToAngle "PlayerBike",PlayerDir
+end Game.NextRound
+
+on GameObject.ResetPlayer 
+   put item 1 the loc of graphic "PlayerBike"  into lastPlayerX -- startX
+   put item 2 the loc of graphic "PlayerBike"  into lastPlayerY -- startY
+   if gGameTurn > 2 then Game.NextRound
+   put startX,startY into playerXY
+   set the loc of graphic "PlayerBike" to playerXY
+   set the points of graphic "PlayerLaserWall" to  playerXY
+   set the loc of graphic "PlayerLaserWall" to playerXY
+   
+   ---DEPRECATE--set the loc of graphic "PlayerMarker" to playerXY
+   put 0 into playerTrailLength
+   put 0 into playerCornerCount
+   put 1 into playerVectorLoops
+   put "" into playerVectorIncrements
+   put xDir into lastXdir
+   put yDir into lastYDir
+   put empty into lastKey
+end GameObject.ResetPlayer
+
+on Game.StartTrainer 
+   put false into bIsPlaying
+   if there is not a graphic "PlayerLaserWall" then init.app
+   GameObject.ResetPlayer
+   lock messages
+   set the showName of graphic "Gamegrid" to true
+   set the label of graphic "gameGrid" to "3"
+   wait 1 second
+   set the label of graphic "gameGrid" to "2"
+   wait 1 second
+   set the label of graphic "gameGrid" to "1"
+   set the showName of graphic "Gamegrid" to false
+   put 0 into gGameTurn
+   add 1 to gGameRound
+   put true into bIsPlaying
+   unlock messages
+end Game.startTrainer
+
+
+
+function Prop.getPropertyLength tSet,tProp
+   put "set the customPropertySet of this card to" &&  tSet &cr into tCommand
+   put "put the" &&  tProp  &&"of this card into tArray" after tCommand
+   do tCommand
+   put the keys of tArray into tKeys
+   set the customPropertySet of this card to empty
+   return the number of lines of tKeys 
+end Prop.getPropertyLength
+
+function Prop.getPropertyData tSet,tProp,tKey
+   set the customPropertySet of this card to tSet
+   put the tProp of this card into tArray
+   set the customPropertySet of this card to empty
+   put the keys of tArray into tKeys
+   sort lines of tKeys numeric ascending
+   if tKey is a number then
+      put line tKey of tKeys into gCurrentPropertyVariable
+      return tArray[line tKey of tKeys]
+   end if
+   put tKey into gCurrentPropertyVariable
+   return tArray[tKey]
+end Prop.getPropertyData
+
+
+
+--// records the points of player laser wall when the player dies
+On RecordGraphicTrail tName
+   put tName&"TrailData" into tSet
+   put Prop.getPropertyLength(tSet,"TrailArray")+1 into trailKeyCount
+   set the label of this stack to "Player Trails:" &&  trailKeyCount 
+   put the points of graphic (tName & "LaserWall") into tData
+   put the number of lines of tData into tLengthOfTrail
+   --if tLengthOfTrail < 20 then exit RecordGraphicTrail
+   put  string.padNumber(trailKeyCount,4)  &"_"& string.padNumber(tLengthOfTrail,4)  into tKey
+   put tName & "TrailData" into tSet
+   Prop.SetPropertyKeyData tSet,"TrailArray",tKey,tData
+   put string.padNumber(trailKeyCount,4) &"_"& string.padNumber(number of lines of playerVectorIncrements,4)   into tKey
+   Prop.SetPropertyKeyData "VectorIncrementData","VectorIncrements",tKey,playerVectorIncrements
+end RecordGraphicTrail
+
+function Prop.ProcessATrailToVectors tDataSet,tProp,tKey
+   set the customPropertySet of this card to tDataSet 
+   put the TrailArray of this card  into tArray
+   set the customPropertySet of this card to empty
+   put the keys of tArray into KeyLines
+   sort lines of keyLines numeric ascending
+   filter lines of KeyLines without empty
+   if tKey is a number then put line tKey of KeyLines into tKey
+   put tArray[tKey] into tPoints
+   filter lines of tPoints without empty
+   put the number of lines of tPoints into N
+   repeat with i = N to 2 step -1
+      --- subtract start point from end  point 
+      put item 1 of line i of tPoints - item 1 of line i-1 of tPoints into vectorX
+      put item 2 of line i of tPoints - item 2 of line i-1 of tPoints into vectorY
+      if vectorX is  0 and vectorY is  0  then next repeat
+      put vectorX & comma & vectorY & cr before newPoints
+   end repeat
+   put ProcessRepeatingVectors(newPoints) into tVectorIncrementData
+   return tVectorIncrementData
+end Prop.ProcessATrailToVectors
+
+
+/* ProcessTrailsToVectors 
+--- converts distance between two points to binary vx,vy,loop list */
+On Prop.ProcessTrailsToVectors tDataSet,tDestinationSet
+   set itemDel to comma
+   if tDestinationSet is empty then put "VectorIncrementData" into  tDestinationSet
+   --- TrailArray is  x,y coordinate list
+   set the customPropertySet of this card to tDataSet 
+   put the TrailArray of this card  into tArray
+   set the customPropertySet of this card to empty
+   put the keys of tArray into KeyLines
+   filter lines of KeyLines without empty
+   
+   repeat for each line K in KeyLines
+      put tArray[K] into tPoints
+      filter lines of tPoints without empty
+      put the number of lines of tPoints into N
+      
+      --- don't record junk trails
+      --if N < 10 then next repeat
+      put "" into newPoints
+      --- increment through points along  the trail
+      repeat with i = 1 to N-1 
+         --- subtract start point from end  point 
+         put item 1 of line i+1 of tPoints - item 1 of line i of tPoints into vectorX
+         put item 2 of line i+1 of tPoints - item 2 of line i of tPoints into vectorY
+         if vectorX is  0 and vectorY is  0  then next repeat
+         put math.getSign(vectorX) & comma & math.getSign(vectorY) & cr before newPoints
+      end repeat
+      filter NewPoints without empty
+      
+      --- remove excess lines add  the loop counts
+      put ProcessRepeatingVectors(newPoints) into tVectorIncrementList
+      --- pad name with characters for property storage -- probably don't need that
+      put string.padNumber(N,4) into tTrailLength
+      put string.padNumber(number of lines of tVectorIncrementList,4) into tVecCount
+      put Prop.getPropertyLength(tDestinationSet,"VectorIncrements")+1 into tPropLength
+      put  string.padNumber(tPropLength,4) & "_" & tTrailLength &"_"& tVecCount  into tVectorPropName
+      
+      set the customPropertySet of this card to tDestinationSet
+      put the VectorIncrements of this card into tVecArray
+      put tVectorIncrementList into tVecArray[tVectorPropName]  
+      set the VectorIncrements of this card to tVecArray
+      set the customPropertySet of this card to empty
+      
+      --Prop.SetPropertyKeyData tDestinationSet,"VectorIncrements",tVectorPropName,tVectorIncrementList
+   end repeat
+   prop.RemoveEmptyIndices tDestinationSet,"VectorIncrements"
+end Prop.ProcessTrailsToVectors
+
+on Prop.RenamePropertyArrayIndex tSet,tProp
+   set the customPropertySet of this card to tSet
+   put the tProp of this card into tArray
+   put the keys of tArray into tKeys
+   sort lines of tKeys numeric ascending
+   put 0 into N
+   put "" into tNewArray
+   repeat for each line L in tKeys
+      add 1 to N
+      put string.PadNumber(N,4) into tNamePrefix
+      put tArray[L] into tListData
+      put string.padNumber(the number of lines of tListData,4) into tListLength
+      put tNamePrefix &"_"& tListLength into tNewName
+      put tListData into tNewArray[tNewName]
+   end repeat
+   set the tProp of this card to tNewArray
+end Prop.RenamePropertyArrayIndex
+
+function Count.EnemyVectorIncrements
+   set the customPropertySet of this card to EnemyTrailData
+   put the VectorIncrements of this card into vectorsArray
+   put the keys of vectorsArray into vKeys
+   put the number of lines of vKeys+2 into enemyTrailCount
+   return enemyTrailCount
+end Count.EnemyVectorIncrements
+
+on Turn.Bit
+   send BeBitLike to graphic "Boom" in (random(400)-random(300)) milliseconds
+end Turn.Bit
+
+
+on DirToAngle tGraphic,tDir
+   switch tDir
+      case "Up"
+         set the angle of graphic tGraphic to 30
+         break
+      case "Down"
+         set the angle of graphic tGraphic to 90
+         break
+      case "Left"
+         set the angle of graphic tGraphic to 180
+         break
+      case "Right"
+         set the angle of graphic tGraphic to 0
+         break
+   end switch
+end DirToAngle
+
+on GameObject.PlaceSensor tGraphic,tDir
+   put tGraphic&"FrontSensor" into tSensor
+   if exists(graphic tSensor) is false then exit GameObject.PlaceSensor
+   set the loc of graphic tSensor to the loc of graphic tGraphic
+   switch tDir
+      case "Up"
+         set the height of graphic tSensor to 8
+         set the width of graphic tSensor to gGridWidth
+         set the bottom of graphic tSensor to the top of graphic tGraphic+(6)
+         break
+      case "Down"
+         set the height of graphic tSensor to 8
+         set the width of graphic tSensor to gGridWidth
+         set the top of graphic tSensor to the bottom of graphic tGraphic
+         break
+      case "Left"
+         set the right of graphic tSensor to the left of graphic tGraphic
+         set the height of graphic tSensor to gGridHeight
+         set the width of graphic tSensor to 8
+         break
+      case "Right"
+         set the left of graphic tSensor to the right of graphic tGraphic
+         set the height of graphic tSensor to gGridHeight
+         set the width of graphic tSensor to 8
+         break
+   end switch
+end  GameObject.PlaceSensor
+
+on GameObject.PlaceAdvancedSensor tGraphic,tDir
+   --put tGraphic&"FrontSensor" into tSensor1
+   put tGraphic&"AdvancedSensor" into tSensor
+   if exists(graphic tSensor) is false then exit GameObject.PlaceAdvancedSensor
+   set the loc of graphic tSensor to the loc of graphic tGraphic
+   switch tDir
+      case "Up"
+         set the height of graphic tSensor to gGridHeight
+         set the width of graphic tSensor to 18
+         set the bottom of graphic tSensor to the top of graphic tGraphic
+         break
+      case "Down"
+         set the height of graphic tSensor to gGridHeight
+         set the width of graphic tSensor to 18
+         set the top of graphic tSensor to the bottom of graphic tGraphic
+         break
+      case "Left"
+         
+         set the height of graphic tSensor to 18
+         set the width of graphic tSensor to gGridWidth
+         set the right of graphic tSensor to the left of graphic tGraphic
+         break
+      case "Right"
+         
+         set the height of graphic tSensor to 18
+         set the width of graphic tSensor to gGridWidth
+         set the left of graphic tSensor to the right of graphic tGraphic
+         break
+   end switch
+end GameObject.PlaceAdvancedSensor
+
+
+--// after trails are processed, run the trails and save from start to crash
+on Game.RunEnemy aNumber
+   --- validate continuance
+   if Game.isValid() = false then exit Game.RunEnemy  --- Beware of Infinite Loop
+   if bIsPlaying = false then exit Game.RunEnemy
+   set the customPropertySet of this card to VectorIncrementData
+   put the VectorIncrements of this card into tVectorsListArray
+   put the keys of tVectorsListArray into keylines
+   if the number of lines of keyLines < 3 then exit Game.RunEnemy
+   --- validate aNumber 
+   put aNumber into EnemyTrailNumber
+   if aNumber is empty then put the number of lines  of keylines into EnemyTrailNumber
+   if aNumber >= EnemyTrailNumber then put 1 into EnemyTrailNumber
+   
+   --- get the trail data
+   put line EnemyTrailNumber of tEnemyVectorKeys into tEnemyTrailIndex
+   put tVectorsListArray[tEnemyTrailIndex] into tVectorsList
+   put the number of lines of tVectorsList into tListLength
+   
+   put  string.padNumber(EnemyTrailNumber,4) into tIndexHead
+   put  string.padNumber(tListLength,4) into tIndexlTail
+   put tIndexHead &"_"&  tIndextail into tEnemyIndexLabel
+   
+   put item 1 to 2 of EnemyXY into EnemyLastXY
+   
+   --- MOVEMENT ON VECTOR OCCURS HERE !!_______(@T-T@)
+   put line EnemyVectorLineNumber of tVectorsList into vXvYData
+   add item 1 of vXvYData to item 1 of EnemyXY
+   add item 2 of vXvYData to item 2 of EnemyXY
+   
+   
+   --- if there is No loop bit vXvYData  
+   if EnemyVectorLineNumber > 1 and number of items of vXvYData = 2 then
+      put EnemyVectorLineNumber-1 into lastEnemyVectorLineNumber
+      --put line lastEnemyVectorLineNumber of tPath into lastXY
+      put item 1 of EnemyXY into curX
+      put item 2 of EnemyXY into curY
+      put item 1 of EnemyLastXY into lastX
+      put item 2 of EnemyLastXY into lastY
+      
+      --- MAKE TURNS HERE
+      if curX-lastX > 0 then put "right" into Dir
+      if curX-lastX < 0 then put "left" into Dir
+      if curY-lastY > 0 then put "down" into Dir
+      if curY-lastY < 0 then put "up" into Dir
+      
+      --- Rotate the Triangle 
+      DirToAngle "EnemyBike",Dir
+      
+      --GameObject.PlaceSensor "changesMarker",Dir
+      set the loc of graphic "EnemyBike" to EnemyXY
+   end if
+   
+   put cr & EnemyXY  after EnemyLaserWallPoints
+   
+   --- move every other loop 
+   if trailDelay < 2 then
+      add 1 to traildelay
+   else
+      put 0 into trailDelay
+      set the points of graphic "EnemyLaserWall" to line 1 to -1 of EnemyLaserWallPoints
+   end if
+   
+   ---- do not record junk trail runs
+   if the number of lines of EnemyLaserWallPoints > 10 then
+      if  CheckObjectLineCollision("EnemyBike","EnemyLaserWall") is true then
+         EnemyCrashRecord aNumber,EnemyVectorLineNumber
+         exit Game.RunEnemy
+      end if
+      if CollisionBorder("EnemyBike","GameGrid") is true then
+         EnemyCrashRecord aNumber,EnemyVectorLineNumber
+         exit Game.RunEnemy
+      end if
+   end if
+   
+   add 1 to EnemyVectorLineNumber
+   if EnemyVectorLineNumber < tListLength then 
+      ---send Game.RunEnemy && anumber to stack (the mainStack of this stack) in 20 milliseconds
+   else
+      put 1 into EnemyVectorLineNumber
+      --Prop.EnemyCrashRecord aNumber,EnemyVectorLineNumber
+      GameObject.ResetEnemy
+      --set the loc of graphic "EnemyBike" to centerScreen()
+   end if
+end Game.RunEnemy
+
+
+on Prop.EnemyCrashRecord aNumber,EndLine
+   if aNumber is empty then  put 1 into aNumber
+   if endLine is empty then put -1 into endLine
+   put aNumber into EnemyTrailNumber
+   put 20 into AICrashLimit
+   put Prop.getPropertyLength("VectorIncrementData","VectorIncrements") into EnemyTrailNumber
+   set the customPropertySet of this card to VectorIncrementData
+   put the VectorIncrements of this card into tArray
+   put the keys of tArray into tArrayKeys
+   
+   
+   -- get current array data from end of list
+   --- create a space for the new array data
+   put tArray[EnemyTrailNumber] into tTrailData
+   filter lines of tTrailData without empty
+   if number of lines of tTrailData = 0 then exit Prop.EnemyCrashRecord
+   
+   --- truncate to ignore the  crash points, leave room for improvisation
+   put line 1 to EndLine of tTrailData into tEnemyTrailToCrash
+   
+   --// dont record poorly trailed enemies
+   if number of lines of EnemyTrailToCrash > AICrashLimit then
+      put string.padNumber(enemyTrailCount,4)   into tPropTail
+      put string.padNumber(number of lines of EnemyTrailToCrash,4) into tPropHead
+      put tPropHead &"_"& tPropHead
+      Prop.SetPropertyKeyData "EnemyTrailData","VectorIncrements",tTrailIndex,tEnemyTrailToCrash
+   end if
+   if Game.isValid() = true then GameObject.ResetEnemy aNumber
+end Prop.EnemyCrashRecord
+
+on GameObject.ResetEnemy aNumber
+   add 1 to aNumber
+   put aNumber into EnemyTrailNumber
+   put Count.EnemyVectorIncrements() into enemyTrailCount
+   if aNumber is empty then  put 1 into aNumber
+   put aNumber into EnemyTrailNumber
+   RandomStartingPos
+   put empty into EnemyLaserWallPoints
+   set the points of graphic "EnemyLaserWall" to EnemyX,EnemY
+   put 0 into changesDelay
+   --Game.RunEnemy EnemyTrailNumber
+end GameObject.ResetEnemy
+
+on UI.refreshFields tField,tText
+   put tText into field tField
+end UI.refreshFields
+
+on MouseUp.ResetButton
+   init.app
+end MouseUp.ResetButton
+
+
+on rawKeyDown tKey
+   --- put tkey && numtochar(tKey)
+   put the thumbPosition of scrollbar "TrailReviewScrollbar" into N
+   switch tKey
+      case 65288 --- Delete Key
+         MouseUp.DeleteTrailButton
+         break
+      case 65309 --- Mouse Wheel Up
+      case 61 ---- Plus Key (keyboard)
+         add 1 to N
+         set the thumbPosition of scrollbar"TrailReviewScrollbar" to N
+         break
+      case 65308 --- Mouse Wheel Down
+      case 45 ---- Minus Key (keyboard)
+         subtract 1 from N
+         set the thumbPosition of scrollbar "TrailReviewScrollbar" to N
+         break
+   end switch
+   if tKey <> 65309 and tKey <> 65308 then KeyDown numtochar(tKey)
+   --pass rawKeyDown
+end rawKeyDown tKey
+
+
+function reversePoints tPoints
+   repeat with i = number of lines of tPoints down to 1
+      put line i of tPoints & cr after tPointsOut
+   end repeat
+   filter lines of tPointsOut without empty
+   return tPointsOut
+end reversePoints
+
+
+
+
+on TruncateReviewStart tStart
+   put tStart into reviewStart
+   UI.ReviewPlayerTrailData  (thumbPosition of scrollbar "TrailReviewScrollbar")
+end TruncateReviewStart
+
+on TruncateReviewEnd tEnd
+   put tEnd into reviewEnd
+   UI.ReviewPlayerTrailData  (thumbPosition of scrollbar "TrailReviewScrollbar")
+end TruncateReviewEnd
+
+
+on UI.ReviewPlayerTrailData tRow 
+   if there is not a graphic "ReviewTrail" then
+      set the style of the templateGraphic to "Polygon"
+      set the name of the templateGraphic to "ReviewTrail"
+      create graphic
+   end if
+   put Prop.getPropertyData("PlayerTrailData","TrailArray",tRow) into tPoints
+   lock screen
+   --put reversePoints(tPoints) into tReviewTrailPoints
+   lock messages
+   set the endValue of scrollbar "EndScrollbar" to number of lines of tPoints-reviewStart
+   put reversePoints(tpoints) into tPoints
+   unlock messages
+   set the points of graphic "ReviewTrail" to line   reviewStart to (reviewStart+reviewEnd)  of tPoints
+   set the lineSize of graphic "ReviewTrail" to 2
+   set the markerDrawn of graphic "ReviewTrail" to true
+   set the markerLineSize of graphic "ReviewTrail" to 6
+   set the markerpoints of graphic "ReviewTrail" to 0,0
+   set the foregroundColor of graphic "ReviewTrail" to red
+   set the borderColor of graphic "ReviewTrail" to empty
+   set the showBorder of graphic "ReviewTrail" to false
+   set the ThreeD of graphic "ReviewTrail" to false
+   --line (random(number of lines of the ColorNames)) of the ColorNames
+   if width of graphic "ReviewTrail" > width of graphic "GameGrid" or  height of graphic "ReviewTrail" > height of graphic "GameGrid" then
+      set the width of graphic "ReviewTrail" to floor(width of graphic "GameGrid"/1.147)
+      set the height of graphic "ReviewTrail" to  floor(height of graphic "GameGrid"/1.147)
+   end if
+   set the loc of graphic "ReviewTrail" to the loc of graphic "GameGrid"
+   set the originalPoints of scrollbar "SetTrailDivisions" to tPoints
+   put the number of lines of the originalPoints of scrollbar "SetTrailDivisions" into tEnd
+   lock messages
+   if the mouseloc is not within the rect of  scrollBar "StartScrollbar" and  the mouseloc is not within the rect of  scrollBar "EndScrollbar" then 
+      set the endValue of scrollbar "StartScrollbar" to number of lines of tPoints
+      set the thumbposition of scrollBar "StartScrollbar" to 1
+      
+      set the endValue of scrollbar "EndScrollbar" to number of lines of tPoints-thumbposition of scrollBar "StartScrollbar"
+      set the startValue of scrollbar "EndScrollbar" to 1
+      set the thumbposition of scrollBar "EndScrollbar" to number of lines of tPoints
+      put number of lines of tPoints into reviewEnd
+   end if
+   unlock messages
+   
+   put 1 into reviewStart
+   unlock screen
+end UI.ReviewPlayerTrailData
+
+on Prop.RemoveEmptyIndices tSet,tPropertyName
+   set the customPropertySet of this card to tSet
+   do "put the" &&  tPropertyName  &&"of this card into tOldArray"
+   put "" into tNewArray
+   put the keys of tOldArray into tKeyList
+   
+   set itemDel to comma
+   repeat for each line tKey in tKeyList
+      put tOldArray[tKey] into tVectorList
+      filter lines of tVectorList without empty
+      if number of lines of tVectorList < 3 then next repeat
+      if abs(item 1 of line 1 of tVectorList) is not a number then next repeat
+      
+      --put string.padNUmber(number of lines of tVectorList,4) into tKeyTail
+      --put char 1 -5 of tKey  & tKeyTail into tNewKeyIndex
+      put tOldArray[tKey] into tNewArray[tKey]
+   end repeat
+   do "Set the" && tPropertyNAme && "of this card to tNewArray"
+end Prop.RemoveEmptyIndices
+
+on Prop.DeleteTrail tKey,tSet,tPropertyName
+   if tKey is empty then   put the thumbPosition of scrollbar "TrailReviewScrollbar" into tKey
+   if tSet is empty then
+      put "PlayerTrailData" into tSet
+      put "TrailArray" into tPropertyName
+      put the TrailArray of this card into tArray
+   end if
+   put Prop.getPropertyData(tSet,tPropertyName,tKey) into tPoints
+   set the customPropertySet of this card to tSet
+   do "put the" &&  tPropertyName  &&"of this card into tArray"
+   
+   put the keys of tArray into tArrayKeys
+   sort lines of tArrayKeys
+   put line tKey of tArrayKeys into tRow
+   delete variable tArray[tRow]
+   do "set the" &&   tPropertyName  && "of this card to tArray"
+   put the endValue of scrollbar "TrailReviewScrollbar"-1 into tMax
+   set the endValue of scrollbar "TrailReviewScrollbar" to tMax
+   
+   set the thumbPosition of scrollbar "TrailReviewScrollbar" to tKey-1
+   put Prop.getPropertyLength("PlayerTrailData","TrailArray")+1 into trailKeyCount
+   set the label of this stack to "Player Trails:" &&  trailKeyCount 
+end Prop.DeleteTrail
+
+on SaveChangesToSubDividedPath
+   Prop.SetPropertyKeyData "PlayerTrailData","TrailArray",gCurrentPropertyVariable,the points of graphic "ReviewTrail"
+end SaveChangesToSubDividedPath
+
+on   MouseUp.SaveChangesButton
+   SaveChangesToSubDividedPath
+end   MouseUp.SaveChangesButton
+
+on MouseUp.DeleteTrailButton 
+   Prop.DeleteTrail 
+end MouseUp.DeleteTrailButton
+
+on MouseUp.DrawAllButton
+   set the customPropertySet of   this card to "VectorIncrementData"
+   put the customKeys  of  this card into tElements
+   put the VectorIncrements of this card into tVectorsArray
+   set the customPropertySet of  this card  to empty
+   put the keys of tVectorsArray into tVectorKeys
+   
+   filter lines of tVectorKeys without empty
+   put the number of lines of tVectorKeys into tLineCount
+   if tLineCount > 100 then
+      Answer "More than 100 Trails!!" with "First 100" and "Recent 100" and "Nevermind Then"
+      if it is "Nevermind then" then exit MouseUp.DrawAllButton
+      if it is "First 100" then
+         put line -100 to -1 of tVectorKeys into tVectorKeys
+      else
+         put line 1 to 100 of tVectorKeys into tVectorKeys
+      end if
+      
+   end if
+   
+   put 0 into i
+   repeat for each line tKey in tVectorKeys
+      filter lines of tVectorsArray[tKey] without empty
+      add 1 to i
+      put tVectorsArray[tKey] into tData
+      filter lines of tData without empty
+      if tData is empty then next repeat
+      ---
+      UI.DrawTrailHistory i,tData
+   end repeat
+end MouseUp.DrawAllButton
+
+on UI.redrawFromVectors tIndexNumber
+   set the customPropertySet of   this card to "VectorIncrementData"
+   put the customKeys  of  this card into tElements
+   put the VectorIncrements of this card into tVectorsArray
+   set the customPropertySet of  this card  to empty
+   put the keys of tVectorsArray into tVectorKeys
+   put line tIndexNumber of tVectorKeys into tIndexName
+   put tVectorsArray[tIndexName] into tVectorsData
+   UI.DrawTrailHistory tIndexNumber,tVectorsData
+end UI.redrawFromVectors
+
+on UI.DrawTrailHistory N,theData
+   if exists (graphic ("Test" & N)) then delete graphic ("Test" & N)
+   put centerX,centerY into StartXY
+   put StartXy into tPoints
+   put item 1 of startXy into x
+   put item 2 of startXy into y
+   filter theData without empty
+   
+   set itemDel to comma
+   repeat for each line VecData in theData
+      put item 1 of VecData into xDir
+      put item 2 of VecData into yDir
+      put item 3 of VecData into increments
+      if increments is empty or increments is 0 then put 1 into increments
+      if xDir is not 0 then 
+         put Math.getSign(xDir) into tXmult
+         repeat with i = 1 to increments
+            add (xDir) to X
+            put cr & X & comma & y after tPoints
+         end repeat
+      end if
+      if yDir is not 0 then 
+         put Math.getSign(yDir) into tymult
+         repeat with i = 1 to increments
+            add (yDir) to Y
+            put cr & X & comma & y after tpoints
+         end repeat
+      end if
+   end repeat
+   put "test"&N into tName
+   if  exists(graphic tName) is false then 
+      create graphic
+      set the name of it to "test"&N
+      set the style of it to "Line"
+   end if
+   set the points of graphic tName to tPoints
+   set the loc of graphic tName to the loc of graphic "GameGrid"
+end  UI.DrawTrailHistory
+----------
+
+function List.AllGraphics aName
+   put the number of graphics of this stack into N
+   repeat with i = 1 to n
+      put cr & the short name of graphic i of this stack after AllGraphics
+   end repeat
+   sort allGraphics
+   filter allGraphics without empty
+   if aName is not empty then filter AllGraphics with aName&"*"
+   return AllGraphics
+end List.AllGraphics
+
+function GameObject.GameGridCenter
+   return loc of graphic "GameGrid"
+end GameObject.GameGridCenter
+
+function Math.getSign tval
+   if tVal = 0 then return 0
+   if tval < 0 then
+      return -1 
+   else
+      return 1 
+   end if
+end Math.getSign
+
+on Prop.ClonePropertySet tSetSource,tSetDestination
+   do "set the customPropertySet of this card to" && tSetSource
+   put the customKeys of this card into tSourceKeys
+   repeat for each line tKey in tSourceKeys
+      do "put the" && tKey &&"of this card into tArray"
+      set the customPropertySet of this card to tSetDestination
+      do "set the" && tKey &&"of this card to tArray"
+   end repeat
+   set the customPropertySet of this card to empty
+end Prop.ClonePropertySet
+
+on init.Enemy aNumber
+   put loc of graphic "GameGrid" into EnemyXY
+   set the visitedrects of graphic "EnemyLaserWall" to screenCenter()
+   put Count.EnemyVectorIncrements() into enemyTrailCount
+   if aNumber is empty then put  1 into aNumber
+   put aNumber into EnemyTrailNumber
+   put 1 into enemyLoopPosition
+   put 1 into EnemyVectorLineNumber
+   put empty into EnemyLaserWallPoints
+   put 0 into changesDelay
+   ---Random start position
+   put the height of graphic "GameGrid"  into H
+   put the width of graphic "GameGrid"  into W
+   put the loc of graphic "GameGrid" into GGXY
+   put item 1 of GGXY into GGX
+   put item 2  of GGXY into GGY
+   set the randomSeed to the seconds-random(the seconds)
+   put random(4) into rStart
+   switch rStart
+      case 1  --- left
+         put left of graphic "gameGrid"+150 into startX
+         put GGY into enemyY
+         put "right" into enemyDir
+         break
+      case 2 --- top
+         put GGX into enemyX
+         put 150 into enemyY
+         put "down" into enemyDir
+         break
+      case 3 --- right
+         put H-150 into enemyX
+         put GGY into enemyY
+         put "left" into enemyDir
+         break
+      case 4 --- bottom
+         put GGX into startX
+         put H-150 into enemyY
+         put "up" into enemyDir
+         break
+   end switch
+   put enemyX,enemyY into enemyXY
+   set the points of graphic "EnemyLaserWall" to enemyXY & cr & enemyXY
+   put Prop.getPropertyLength("VectorIncrementData","VectorIncrements") into tLen
+   put random(tLen) into EnemyTrailNumber
+   put Prop.getSetPropKey("VectorIncrementData","VectorIncrements",EnemyTrailNumber) into EnemyTrailPreset
+   RunEnemyCycle
+   --Game.runEnemy EnemyTrailNumber
+end init.Enemy
+
+on init.EnemyLaserWall
+   
+end init.EnemyLaserWall
+
+on init.Graphics
+   --put "ChangesMarker,EnemyVectorLineNumber" into tChangesGraphicItems
+   --put "PlayerMarkerFrontSensor,ChangesMarkerFrontSensor,ChangesMarkerFrontSensorAdvancedSensor" into tRectanguGraphics
+   set the style of the templateGraphic to "rectangle"
+   put "GameGrid" into tGridGraphicItems
+   if There is not a graphic "GameGrid" then 
+      create graphic "GameGrid"
+      set the height of graphic "GameGrid" to height of this card
+      set the width of graphic "GameGrid" to height of this card
+      set the right of graphic  "GameGrid" to right of this card
+   end if
+   
+   put "EnemyLaserWall,PlayerLaserWall" into tPolygonGraphics
+   set itemDel to comma
+   set the style of the templateGraphic to "polygon"
+   repeat for each item tName in tPolygonGraphics
+      if there is not a graphic tName then 
+         set the name of the templateGraphic to tName
+         set the points of the templateGraphic to 0,0
+         create graphic 
+      end if
+   end repeat
+   --- 'regular' graphics
+   set the style of the templateGraphic to "regular"
+   set the polySides of the templateGraphic to 3
+   put "EnemyBike,PlayerBike,Boom" into tRegularGraphics
+   repeat for each item tName in gInitGraphics
+      if there is not a graphic tName then 
+         set the name of the templateGraphic to tName
+         create graphic 
+      end if
+   end repeat
+end init.Graphics
+
+
+on init.AppLocal
+   put centerY into startY
+   put centerX into startX
+   put the seconds into lastPlayerSeconds
+end init.AppLocal
+
+on init.App
+   init.Globals
+   init.AppLocal
+   init.Graphics
+   init.Bit
+   init.PlayerBike
+   init.Enemy  --- enemy is broken!!
+   init.Game
+end init.App
+
+on init.Game
+   Game.startTrainer
+   Game.ValidatePlaying
+end init.Game
+
+on init.Bit
+   send initBit to graphic "BOOM"
+end init.Bit
+
+on Game.ValidatePlaying
+   if the mouseloc is not within 0,0,width of this card, height of this card then exit Game.ValidatePlaying
+   if the tool is not "browse tool" then exit Game.ValidatePlaying
+   Game.Continue
+end Game.ValidatePlaying
+
+on Game.Continue
+   if bIsplaying is false then exit Game.Continue
+   if the tool is "Browse Tool" and the mouseloc is within 0,0, width of this card, height of this card then  send Game.Loop to this stack in 100 milliseconds
+end Game.Continue
+
+on Game.Loop
+   if bIsplaying is false then 
+      send Game.ValidatePlaying to this stack in 400 milliseconds
+      exit Game.Loop
+   end if
+   add 1 to gGameTurn
+   if something is required then 
+      --Do stuff here first
+   end if
+   
+   --- Game.RunEnemy  --- enemy is very broke
+   lock screen
+   --- Turn.Bit  -- where did it go?
+   Turn.Player
+   Turn.UI
+   RunEnemyCycle
+   unlock screen
+   if noGoodComesOfIt then exit Game.Loop
+   Game.ValidatePlaying
+end Game.Loop
+
+function Prop.getSetPropKey tSet,tProp,tKey
+   set the  customPropertySet of this card  to tSet
+   do "put the"&&  tProp &&"of this card into tArray"
+   --return the keys of tArray
+   if tKey is a number then 
+      put the keys of tArray into tArrayKeys
+      sort tArrayKeys numeric ascending
+      put line tKey of tArraykeys into tKeyLabel
+      return tArray[tKeyLabel]
+   end if
+   return tArray[tKey]
+end Prop.getSetPropKey
+
+function Game.isValid
+   put true into bValid
+   if the mouseLoc is within the rect of button "Stop"   then put false into bValid
+   if  the mouseLoc is within the rect of graphic "STOP"  then put false into bValid
+   if the mouseloc is not within 0,0,width of this card,height of this card then put false into bValid
+   if the tool is not "browse tool" then put false into bValid
+   if bValid is not true then set the tool to "pointer tool"
+   return bValid
+end Game.isValid
+
+--// after trails are processed, run the trails and save from start to crash
+on Game.RunEnemy aNumber
+   -- exit loop if conditions warrant
+   if Game.isValid() is false then exit Game.RunEnemy
+   
+   -- Initialize aNumber to 1 if it's empty or 0
+   if aNumber is empty or aNumber = 0  then put Prop.getPropertyLength("VectorIncrementData","VectorIncrements")+1 into aNumber
+   
+   -- Initialize enemyLoopPosition to 1 if it's empty
+   if enemyLoopPosition is empty or enemyLoopPosition is 0 then put 1 into enemyLoopPosition
+   
+   
+   set the customPropertySet of this card to VectorIncrementData
+   Put the VectorIncrements of this card into tVectorsArray
+   set the customPropertySet of this card to empty
+   
+   put the keys of tVectorsArray into KeyLines
+   put the number of lines of KeyLines into KeyLineLimit
+   --- if we've reached the end of the available paths, start over
+   if aNumber+1 > KeyLineLimit then put 1 into aNumber
+   put line aNumber of KeyLines into trailName
+   
+   -- Get vector increments for trailName
+   put tVectorsArray[trailName] into tVectorIncrements
+   UI.DrawTrailHistory aNumber,tVectorIncrements
+   
+   -- Get the number of lines in tVectorIncrements
+   put the number of lines of tVectorIncrements into maxLines
+   -- Store EnemyXY in lastXY if it has 2 items
+   if number of items of EnemyXY = 2 then put EnemyXY into lastXY
+   --- Read vector data and follow the line
+   
+   -- Check if not in free roam mode
+   if bFreeRoam is false then
+      -- Retrieve vXvYData for current EnemyVectorLineNumber from tVectorIncrements
+      put line EnemyVectorLineNumber of tVectorIncrements into xyLData
+      -- Extract x, y, and loop values from xyLData
+      put item 1 of xyLData into xVector
+      put item 2 of xyLData into yVector
+      put item 3 of xyLData into tLoop
+      -- Increment enemyLoopPosition
+      add 1 to enemyLoopPosition
+   else
+      -- Increment EnemyVectorLineNumber and choose a random direction
+      add 1 to EnemyVectorLineNumber
+      PickARandomDirection
+      put false into bFreeRoam
+   end if
+   
+   -- Add vectors to the starting location
+   add xVector*gGridWidth to item 1 of EnemyXY
+   add yVector*gGridHeight to item 2 of EnemyXY
+   -- Set the location of the changesMarker graphic
+   set the loc of graphic "EnemyBike" to EnemyXY
+   
+   -- Calculate direction based on vector and update bike position
+   if EnemyVectorLineNumber >= 1 and number of items of vXvYData = 3 then
+      if xVector > 0 then put "right" into Dir
+      if xVector < 0 then put "left" into Dir
+      if yVector > 0 then put "down" into Dir
+      if yVector < 0 then put "up" into Dir
+      DirToAngle "EnemyBike",Dir
+      --GameObject.PlaceSensor "changesMarker",Dir
+      --GameObject.PlaceAdvancedSensor "ChangesMarkerFrontSensor",Dir
+      set the loc of graphic "EnemyBike" to EnemyXY
+   end if
+   
+   -- Add EnemyXY to EnemyLaserWallPoints
+   put cr & EnemyXY  after EnemyLaserWallPoints
+   -- Update label of EnemyLaserWallPointstracker button
+   --set the label of button "EnemyLaserWallPointstracker" to number of lines of EnemyLaserWallPoints
+   -- Manage trail delay and update EnemyVectorLineNumber graphic
+   if trailDelay < 2 then
+      add 1 to traildelay
+   else
+      put 0 into trailDelay
+      set the points of graphic "EnemyLaserWall" to line 1 to -1 of EnemyLaserWallPoints
+   end if
+   
+   -- Check collisions and react accordingly
+   if the number of lines of EnemyLaserWallPoints > 10 then
+      ---- this is the advanced sensor test, ie, virtual crash =   turn
+      --- NEEDS TO BE REMADE
+      --      if  CheckObjectLineCollision("EnemyBike","EnemyLaserWall") is true then
+      --         PickARandomDirection Dir
+      --      end if
+      
+      --      if CollisionBorder("EnemyBike","GameGrid") is true then
+      --         PickARandomDirection Dir
+      --      end if
+      ---- TESTING TO GET IT ON SCREEN FIRST
+      --      if  CheckObjectLineCollision("EnemyBike","EnemyLaserWall") is true then
+      --         --wait 1 second
+      --         add 1 to aNumber
+      --         init.Enemy aNumber
+      --         --Game.ValidatePlaying
+      --         exit Game.RunEnemy
+      --      end if
+      --      if CollisionBorder("EnemyBike","GameGrid") is true then
+      --         add 1 to aNumber
+      --         init.Enemy aNumber
+      --         --Game.ValidatePlaying
+      --         exit Game.RunEnemy
+      --      end if
+   end if
+   
+   -- Reset enemyLoopPosition and update EnemyVectorLineNumber if needed
+   if enemyLoopPosition > tLoop then
+      put 1 into enemyLoopPosition
+      add 1 to EnemyVectorLineNumber
+   end if
+   --set the label of button changesLoopTracker to trailName && EnemyVectorLineNumber &"/ loop="&enemyLoopPosition
+   -- Validate game state and schedule next run if not finished
+   if EnemyVectorLineNumber < maxLines then 
+      --Game.ValidatePlaying
+      --send Game.RunEnemy && aNumber to stack (the mainStack of this stack) in 20 milliseconds
+   else
+      -- Reset EnemyVectorLineNumber and enemyLoopPosition, set changesMarker to center of screen, and record enemy crash
+      put 1 into EnemyVectorLineNumber
+      put 1 into enemyLoopPosition
+      set the loc of graphic "EnemyBike" to item 1 of centerScreen()-10,item 2 of centerScreen()-20
+      add 1 to aNumber
+      --EnemyCrashRecord aNumber,EnemyVectorLineNumber
+      --Game.ValidatePlaying
+   end if
+end Game.RunEnemy
+
+
+on PickARandomDirection tDir
+   put true into bFreeRoam
+   put random(20) into rx
+   put random(20) into ry
+   if RX < 1 then 
+      put -1into goX
+   else
+      put 1 into goX
+   end if
+   if RY < 1 then 
+      put -1 into goY
+   else
+      put 1 into goY
+   end if
+   
+   switch tDir
+      case "Up"
+         put goX,0  into vXvYData
+         break
+      case "Down"
+         put goX,0  into vXvYData
+         break
+      case "Left"
+         put 0,goY into vXvYData
+         break
+      case "Right"
+         put 0,goY into vXvYData
+         break
+   end switch
+end PickARandomDirection
+
+--// rotate the points of an object
+function Math.rotatePoints x, y, cx, cy, tAngle 
+   --// x,     //X coords to rotate - replaced on return
+   --// y,     //Y coords to rotate - replaced on return
+   --// cx,      //X coordinate of center of rotation
+   --// cy,      //Y coordinate of center of rotation
+   -- // angle)   //Angle of rotation (radians, counterclockwise)
+   put cos(tAngle) into tcos 
+   put sin(tAngle) into tsin  
+   put ((x-cx)*tcos - (y-cy)*tsin) + cx into Xout 
+   put ((x-cx)*tsin + (y-cy)*tcos) + cy into Yout
+   return xOut & comma & yOut
+end Math.rotatePoints
+
+
+
+on ops.admin.CleanPropertySets
+   answer "are you sure" with  "What could go wrong?" and "Yes"
+   if it is not "Yes" then exit ops.admin.CleanPropertySets
+   put the customPropertySets of this card into tPSets
+   filter lines of tPsets without "cREV" & "*"
+   repeat for each line tSet in tPsets
+      set the customPropertySet of this card to tSet
+      set the customKeys of this card to empty
+   end repeat
+   set the customPropertySet of this card to empty
+end ops.admin.CleanPropertySets
+
+on Files.ExportTrails
+   answer folder "Select Folder to save the Trail Data?"
+   if it is empty then exit Files.ExportTrails
+   put it into tRootPath
+   put "VectorIncrementData,Changes,EnemyTrailData,PlayerTrailData" into tItems
+   repeat for each item tSet in tItems
+      do "Set the customPropertySet of this card to" && tSet 
+      put the customKeys of this card into tKeys
+      repeat for each line tProp in tKeys
+         do "put the" && tProp && "of this card into tArray"
+         if the number of lines of the keys of tArray <= 1 then next repeat
+         --put specialFolderPath("Documents")&"/LIGHTBIKE_DATA" into tRootPath
+         if there is not a folder tPath then create folder tRootPath
+         put tRootPath &"/"& tSet into tDataFolder
+         if there is not a folder tDataFolder then create Folder tDataFolder
+         put the keys of tArray into tKeyList
+         Files.ExportPropertySet tSet,tProp,tRow,tDataFolder,tKeyList
+      end repeat
+   end repeat
+   set the customPropertySet of this card to empty
+end Files.ExportTrails
+
+
+on Files.ExportPropertySet tSet,tProp,tRow,tDataFolder,tKeyList
+   set the customPropertySet of this card to tSet
+   put the tProp of this card into tArray
+   put the keys of tArray into tKeyList
+   repeat for each line tRow in tKeyList
+      put tArray[tRow] into tData
+      if number of lines of tData < 8 then next repeat
+      filter lines of tdata without empty
+      put string.padNumber(number of lines of tData,4) into tLineCount
+      put "file:" & tDataFolder & "/" & tLineCount &"_" & tRow &"_xy_loop.csv" into tURLPath
+      put tData into URL tURLPath
+   end repeat
+end Files.ExportPropertySet
+
+--- VectorArrayListToVectorIterFiles no longer necessary 02-22-2024
+function DEPRECATE.VectorArrayListToVectorIterFiles tSet,tProp,tRow,tDataFolder,tKeyList
+   repeat for each line tRow in tKeyList
+      --put tArray[tRow] into tData
+      --converted big lists of vector down to vx,vy,loop data
+      put GetRepeatingVectorData(tSet,tProp,tRow) into tVectorCSV
+      replace "10" with "1" in tVectorCSV
+      put string.padNumber(number of lines of tData,8) into tLineCount
+      put "file:" & tDataFolder & "/" & tLineCount &"_" & tRow &"_xy_loop.csv" into tURLPath
+      put tVectorCSV into URL tURLPath
+   end repeat
+   return "VectorArrayListToVectorIterFiles okay" 
+end DEPRECATE.VectorArrayListToVectorIterFiles
+
+
+on Prop.SetPropertyKeyData tSet,tProp,tKey,tData
+   set the customPropertySet of this card to tSet
+   put the tProp of this card into tArray
+   put tData into tArray[tKey]  
+   set the tProp of this card to tArray
+   set the customPropertySet of this card to empty
+end Prop.SetPropertyKeyData
+
+function GetRepeatingVectorData tSet,tProp,tKey
+   set the customPropertySet of this card to tSet
+   put the tProp of this card into tArray
+   put tArray[tKey] into tData
+   put ProcessRepeatingVectors(tData) into tCleanedData
+   return number of lines of tData &comma& number of lines of tCleanedData &",0" & cr & tCleanedData
+end GetRepeatingVectorData
+
+--- converts n lines of repeating vectors to vx,vy,count
+function ProcessRepeatingVectors tData
+   put "" into tNewData
+   put "" into tLastLine
+   filter lines of tData without empty
+   Replace "-10" with "-1" in tData
+   Replace "10" with "1" in tData
+   repeat for each line L in tData
+      if L is  tLastLine then
+         put L into tLastLine
+         put L & cr after tRepeatList
+         put number of lines of tRepeatList into tRepeatCount
+      else
+         put tLastLine & comma & tRepeatCount & cr after tVectorIterationData
+         put L into tLastLine
+         put 1 into tRepeatCount
+         put "" into tRepeatList
+      end if
+   end repeat
+   filter lines of tVectorIterationData without empty
+   return line 2 to -1 of tVectorIterationData
+end ProcessRepeatingVectors
+
+
+
+function String.RemoveDuplicateLines tData
+   put "" into tNewData
+   repeat with D = number of lines of tData down to 1
+      put line D of tData into tCurrentLine
+      filter lines of tData without tCurrentLine
+      put cr & tCurrentLine  before tNewData
+   end repeat
+   filter lines of tNewData without empty
+   return tNewData
+end String.RemoveDuplicateLines
+
+function String.padNumber tNum,tLen
+   --ops.setDebug "string.padNumber"
+   put number of characters of tNum into tCount
+   repeat with i = 1 to tLen-tCount
+      put 0 before tNum
+   end repeat
+   return tNum
+end String.padNumber
+
+function Script.emptyPuts
+   put the script of stack (the mainStack of this stack) into tScript
+   put tScript into tSubScript
+   filter lines of tSubScript with "*put*"
+   Filter lines of tScript with "put*"
+   put tSubScript & cr & tScript into tScript
+   filter lines of tScript without "*into*"
+   filter lines of tScript without "*after*"
+   filter lines of tScript without "*before*"
+   filter lines of tScript without "--put*"
+   filter lines of tScript without "*--put*"
+   return tScript
+end Script.emptyPuts
+
+
+function Math.clamp pValue, pMin, pMax
+   if pValue < pMin then
+      return pMin
+   else if pValue > pMax then
+      return pMax
+   else
+      return pValue
+   end if
+end Math.clamp
+
+
+on UI.SubdividePath N,tPoints,tGraphicName
+   repeat with i = 2 to number of lines of tPoints-1 
+      put line i of tPoints into tFirst
+      put line i+1 of tPoints into tSecond
+      
+      if item 1 of tFirst <> item 1 of tSecond then
+         put 0 into tDiv
+         
+         if item 1 of tFirst < item 1 of tSecond  then
+            put item 1 of tFirst into tStart
+            put item 1 of tSecond into tEnd
+         else
+            put item 1 of tFirst into tEnd 
+            put item 1 of tSecond into tStart
+         end if
+         repeat with x = tStart to tEnd
+            add 1 to tDiv
+            if tDiv = N then
+               put 0 into tDiv
+               put tFirst & cr & x &comma & item 2 of tSecond & cr & tSecond & cr after tNewPoints
+            end if
+         end repeat
+      else
+         put 0 into tDiv
+         if item 2 of tFirst < item 2 of tSecond  then
+            put item 2 of tFirst into tStart
+            put item 2 of tSecond into tEnd
+         else
+            put item 2 of tFirst into tEnd 
+            put item 2 of tSecond into tStart
+         end if
+         repeat with y = tStart to tEnd
+            add 1 to tDiv
+            if tDiv = N then
+               put 0 into tDiv
+               put item 1 of tSecond &comma & Y & cr after  tNewPoints
+            end if
+         end repeat
+      end if
+   end repeat
+   lock screen
+   set the points of graphic tGraphicName  to tNewPoints
+   --set the width of graphic tGraphicName  to floor(width of graphic "GameGrid"/1.147)
+   --set the height of graphic tGraphicName to  floor(height of graphic "GameGrid"/1.147)
+   set the loc of graphic tGraphicName to the loc of graphic "GameGrid"
+end UI.SubdividePath
+
+
+
+on RunEnemyCycle
+   --put floor(thumbposition of scrollbar "TrailReviewScrollbar") into EnemyTrailNumber
+   put Prop.getPropertyLength("VectorIncrementData","VectorIncrements") into tLen
+   put random(tLen) into EnemyTrailNumber
+   --put Prop.getSetPropKey("VectorIncrementData","VectorIncrements",EnemyTrailNumber) into tData
+   if CurrentRunLine is empty then put 1 into CurrentRunLine
+   if CurrentRunLine > number of lines of EnemyTrailPreset then 
+      put 1 into CurrentRunLine
+      put 0 into CurrentRunLoop
+      init.Enemy
+   end if
+   if CurrentRunLoop is empty then put 1 into CurrentRunLoop
+   --- enemytrailpreset is set in init.enemy
+   UI.RunVectors "Enemy",CurrentRunLine,CurrentRunLoop,EnemyTrailPreset
+end RunEnemyCycle
+
+
+on UI.RunVectors tName,tCurLine,tCurLoop,tData
+   filter lines of tData without empty
+   --if exists (graphic ("Test" & N)) then delete graphic ("Test" & N)
+   set itemDel to comma
+   put the points of graphic (tName &"LaserWall") into currentRunPoints
+   put line (number of lines of currentRunPoints) of currentRunPoints  into enemyXY
+   put item 1 of enemyXY into EnemyX
+   put item 2 of enemyXY into EnemyY
+   put tCurLoop into CurrentRunLoop
+   put tCurLine into CurrentRunLine
+   put line tCurLine of tData into vXvYLoop 
+   
+   put item 1 of vXvYLoop into EnemyXDir
+   put item 2 of vXvYLoop into EnemyYDir
+   put item 3 of vXvYLoop into MaxIncrements
+   put vXvYLoop &cr& EnemyXDir,EnemyYDir
+   if EnemyXDir is empty or EnemyYDir is empty then  exit UI.RunVectors
+   if EnemyXDir is not a number then put 0 into EnemyXDir
+   if EnemyYDir is not a number then put 0 into EnemyYDir
+   if MaxIncrements is empty or MaxIncrements is 0 then put 1 into MaxIncrements
+   
+   if EnemyXDir <> 0 then 
+      put Math.getSign(EnemyXDir) into EnemyXDir
+      add (EnemyXDir) * gGridWidth to EnemyX
+      put cr & EnemyX & comma & EnemyY after currentRunPoints
+   end if
+   
+   if EnemyYDir <> 0 then 
+      put Math.getSign(EnemyYDir) into EnemyYDir
+      add (EnemyYDir) * gGridHeight  to EnemyY
+      put cr & EnemyX & comma & EnemyY after currentRunPoints
+   end if
+   
+   put EnemyX & comma & EnemyY into enemyXY
+   
+   add 1 to CurrentRunLoop
+   --put N & cr & "Line:" && tCurLine & cr & "loop:" && tCurLoop & cr & line tCurLine of tData & cr & xDir,yDir
+   ---if loop is done, then increment to next line of the vector data
+   if CurrentRunLoop > MaxIncrements then 
+      put 0 into CurrentRunLoop
+      add 1 to CurrentRunLine
+      
+      --- end of data, go random/maze style free roaming here
+      --UI.RunVectors N,CurrentRunLine,CurrentRunLoop,tData
+      --- let game loop handle next run
+      exit UI.RunVectors
+   end if
+   set the points of Graphic  (tName & "LaserWall")  to  currentRunPoints
+end  UI.RunVectors
+
+
+--- LIGHTBIKEY STACK SCRIPT BELOW ---
+lobal dirX
+global dirY
+global gDir
+global gCounter
+global gMaxCounter
+global gMapRect
+global gGridSpace
+global gAvailableDirections
+global alldirs
+global gRecursiveAttempts
+global gDirectionRecursion
+global gMaxScanDistance
+global bFreshGame
+global bClearAtEnd
+
+on init.Globals
+   put 1 into gMaxScanDistance   --- max distance for LookAround, to be determined
+   put 4 into gDirectionRecursion
+   put 0 into gRecursiveAttempts
+   put 4 into gAvailableDirections
+   put "" into alldirs
+   put 4 into gGridSpace
+   put 2200 into gMaxCounter
+   put math.ScaleRect((rect of image "map" ),99) into gMapRect
+   put 1 into dirX
+   put 0 into dirY
+   put 0 into gCounter
+   put 4 into gDir
+   put true into bFreshGame
+   put the hilite of button "clearAtEnd" into bClearAtEnd
+end init.Globals
+
+on init.App
+   init.Globals
+   init.Graphics
+   set the points of graphic 1 to ScreenCenter()
+   GameObject.Activate ("bike"&the number of graphics of this stack)
+end init.App
+
+on Game.Restart
+   init.Globals
+   put false into bFreshGame
+   put "bike" & the number of graphics of this stack +1 into tName
+   init.Bike tName, 100+random(width of image "map"-100),100+random(height  of image "map"-100)
+   GameObject.Activate ("bike"&the number of graphics of this stack)
+end Game.Restart
+
+on LIGHTBIKEY_init.Graphics
+   if bFreshGame is true then UI.clearGraphics
+   init.BorderFrameGraphic  -- border
+   put "bike" & the number of graphics of this stack+1  into tName
+   LIGHTBIKEY_init.Bike tName, item 1 of ScreenCenter(),item 2 of screenCenter()
+end  LIGHTBIKEY_init.Graphics
+
+
+on  LIGHTBIKEY_GameObject.Activate tGameObjectIndexLabel
+   if tGameObjectIndexLabel is empty then exit  LIGHTBIKEY_GameObject.Activate
+   GameObject.RandomMove tGameObjectIndexLabel
+   GameObject.TravelWithTrails tGameObjectIndexLabel
+end  LIGHTBIKEY_GameObject.Activate
+
+on  LIGHTBIKEY_init.Bike tName,x,y
+   if there is a graphic tName then delete graphic tName
+   set the name of the templateGraphic to tName
+   set the style of the templateGraphic to "polygon"
+   set the lineSize of the templateGraphic to 1
+   set the loc of the templateGraphic to  x,y
+   set the points of the templateGraphic to x,y 
+   set the opaque of the templateGraphic to false
+   set the foregroundColor the templateGraphic to line (random(number of lines of the ColorNames)) of the colorNames
+   set the dropShadow of the templateGraphic to true
+   set the dropShadow["Size"] of the templateGraphic to 2
+   set the dropShadow["Spread"] of the templateGraphic to 0
+   set the dropShadow["Distance"] of the templateGraphic to 2
+   create Graphic
+   set the visitedrects of graphic tName to screenCenter()
+end  LIGHTBIKEY_init.Bike
+
+function screenCenter
+   return width of this stack /2 & comma & height of this stack/2 
+end screenCenter
+
+function math.scaleRect trect,tPercentage
+   put tPercentage*0.01 into tPercentage
+   set itemDel to comma
+   put item 1 of tRect into x1
+   put item 2 of tRect into y1
+   put item 3 of tRect into x2
+   put item 4 of trect into y2
+   put (x1+x2)*tPercentage into tWidth
+   put (x1+x2)*tPercentage into tHeight
+   
+   put (x1+x2)/2 into xcenter
+   put (y1+y2)/2 into yCenter
+   put  xCenter - (tWidth/2) into x1
+   put yCenter - (tHeight/2) into y1
+   put  xCenter + (tWidth/2) into x2
+   put yCenter +(tHeight/2) into y2
+   return x1,y1,x2,y2
+end math.scaleRect
+
+/* LookAround
+gMaxScanDistance is a global variable that defines how far the AI should look in each direction. */
+function LookAround tGameObjectIndexLabel
+   -- Retrieve the points of the graphic "bike"
+   put the points of graphic tGameObjectIndexLabel into tPoints
+   -- Filter out any empty lines from tPoints
+   filter lines of tPoints without empty
+   -- Retrieve the last line of points, which represents the current position of the bike
+   put line -1 of the points of graphic tGameObjectIndexLabel into tPoints
+   -- Extract the x and y coordinates of the bike
+   put item 1 of tPoints into x
+   put item 2 of tPoints into y
+   
+   -- Initialize variables to store the maximum distances in each direction
+   put 0 into maxLeft
+   put 0 into maxRight
+   put 0 into maxUp
+   put 0 into maxDown
+   
+   -- Loop through all possible distances in each direction
+   repeat with distance = 1 to gMaxScanDistance
+      -- Calculate positions to check for obstacles at the current distance
+      put x - (distance * gGridSpace) into checkLeftX
+      put x + (distance * gGridSpace) into checkRightX
+      put y - (distance * gGridSpace) into checkUpY
+      put y + (distance * gGridSpace) into checkDownY
+      
+      -- Check if the position in each direction is available
+      if not collisionDetected(checkLeftX, y, distance) then
+         put distance into maxLeft
+      else
+         exit repeat
+      end if
+      
+      if not collisionDetected(checkRightX, y, distance) then
+         put distance into maxRight
+      else
+         exit repeat
+      end if
+      
+      if not collisionDetected(x, checkUpY, distance) then
+         put distance into maxUp
+      else
+         exit repeat
+      end if
+      
+      if not collisionDetected(x, checkDownY, distance) then
+         put distance into maxDown
+      else
+         exit repeat
+      end if
+   end repeat
+   
+   -- Determine the direction with the longest route
+   put max(maxLeft, maxRight, maxUp, maxDown) into maxDistance
+   put empty into gAvailableDirections
+   if maxDistance = maxLeft then put "1," into gAvailableDirections
+   if maxDistance = maxRight then put "2," after gAvailableDirections
+   if maxDistance = maxUp then put "3," after gAvailableDirections
+   if maxDistance = maxDown then put "4," after gAvailableDirections
+   -- Remove the trailing comma
+   delete char -1 of gAvailableDirections
+   
+   -- Return the available directions
+   return gAvailableDirections
+end LookAround
+
+/* collisionDetected
+The collisionDetected function is a placeholder for your collision detection logic. 
+You need to implement this function based on your game's requirements, such as checking if the position is within the game boundaries or if it intersects with any existing trails. 
+This function returns true if a collision is detected at the specified position and false otherwise.
+*/
+function collisionDetected x, y, distance
+   -- Check if there's a collision at the specified position
+   -- You need to implement this function based on your game logic
+   -- For example, you may check if the position (x, y) is within the bounds of the game area or if it intersects with any existing trails
+   -- Return true if collision is detected, false otherwise
+end collisionDetected
+
+on UI.clearGraphics
+   repeat with i = number of graphics of this stack down to 1
+      delete graphic i of this stack
+   end repeat
+end UI.clearGraphics
+
+
+function math.rectAtPoint x,y,w,h
+   if w <1 then put 1 into w
+   if h < 1 then put 1 into h
+   if x < 1 then put 1 into x
+   if y < 1 then put 1 into y
+   return x-(w/2),y-(h/2),x+(w/2),y+(h/2)
+end math.rectAtPoint
+
+
+on GameObject.TravelWithTrails tGameObjectIndexLabel
+   -- Set the random seed for pseudo-random number generation
+   set the randomSeed to the seconds - (random(the seconds))
+   
+   -- Increment the counter
+   add 1 to gCounter
+   
+   -- Calculate half of the grid space for convenience
+   put gGridSpace / 2 into halfspace
+   
+   -- Retrieve the points of the graphic "bike"
+   put the points of graphic tGameObjectIndexLabel into tPoints
+   
+   -- Filter out any empty lines from tPoints
+   filter lines of tPoints without empty
+   
+   -- Retrieve the current position of the bike
+   put line -1 of tPoints into curXY
+   put curXY into oldXY
+   -- Move the bike according to the current direction
+   add dirX * gGridSpace to item 1 of curXY
+   add dirY * gGridSpace to item 2 of curXY
+   
+   -- Append the new position to the points of the bike
+   put cr & curXY after tPoints
+   
+   -- Display debug information about the flood fill process
+   put "CurXY" && item 1 of curXY & "," & item 2 of curXY   into gDebug
+   put line 1 of field "StatusField" & cr & gDebug into field "StatusField"
+   
+   -- Retrieve the visited rectangles of the bike
+   put the visitedrects of graphic tGameObjectIndexLabel into visList
+   
+   -- Check if the next grid vector has been visited in some direction
+   filter lines of visList with curXY
+   
+   -- If the next grid vector has been visited, make a random move
+   if visList is not empty then
+      GameObject.RandomMove tGameObjectIndexLabel
+   else
+      -- Check if the new position is within the game map boundaries
+      if line -1 of tPoints is within gMapRect then
+         -- Move the bike to the new position
+         set the points of graphic tGameObjectIndexLabel to tPoints
+         
+         -- Update the visited rectangles list
+         put the visitedrects of graphic tGameObjectIndexLabel into visList
+         put cr & curXY after visList
+         set the visitedrects of graphic tGameObjectIndexLabel to visList
+         
+         -- Randomly decide whether to make another random move
+         if random(50) > random(100) then
+            GameObject.RandomMove tGameObjectIndexLabel
+         end if
+         
+         -- Update the counter display
+         --put  gCounter into line 1 of field "StatusField"
+      end if
+   end if
+   
+   put line -1 of the points of graphic tGameObjectIndexLabel into newCurXY
+   if newCurXY = oldXY and gCounter > 30 then 
+      Game.ExitRunningGame tGameObjectIndexLabel
+      exit GameObject.TravelWithTrails
+   end if
+   -- Check if the counter is less than the maximum counter value
+   if gCounter < gMaxCounter then
+      -- Schedule another flood fill iteration
+      GameObject.DetectEndOfLine  tGameObjectIndexLabel
+   end if
+end GameObject.TravelWithTrails
+
+on GameObject.DetectEndOfLine tGameObjectIndexLabel
+   put the lastXY of graphic tGameObjectIndexLabel into oldXY
+   put the loc of graphic tGameObjectIndexLabel into curXY
+   put the lastCounter of graphic tGameObjectIndexLabel  into oldCounter
+   if gCounter-oldCounter < 10 then
+      
+      if newCurXY = oldXY and gCounter > 30 then 
+         Game.ExitRunningGame tGameObjectIndexLabel
+         exit GameObject.DetectEndOfLine
+      else
+         set the lastXy of graphic tGameObjectIndexLabel to curXY
+         set the lastCounter of graphic tGameObjectIndexLabel to gCounter
+         Game.validatePlaying "GameObject.TravelWithTrails",tGameObjectIndexLabel
+      end if
+   end if
+end GameObject.DetectEndOfLine
+
+on Game.validatePlayingWithMessage tMessage,tGameObjectIndexLabel
+   put false into bFreshGame
+   if Game.isValid() = false then exit Game.validatePlayingWithMessage
+   do "send" && tMessage && "&&" && tGameObjectIndexLabel && "to me in 10 milliseconds"
+end Game.validatePlayingWithMessage
+
+on init.BorderFrameGraphic
+   set the style of the templateGraphic to "rectangle"
+   set the opaque of the templateGraphic to true
+   set the width of the templategraphic to gGridSpace-1
+   set the height of the templategraphic to gGridSpace-1
+end init.BorderFrameGraphic
+
+on Game.ExitRunningGame tGameObjectIndexLabel
+   if the tool is "browse tool" then
+      add 1 to gRecursiveAttempts
+      put the points of graphic tGameObjectIndexLabel into tPoints
+      do "put the Directions"& gDirectionRecursion &&"of this stack into tDirList"
+      if gRecursiveAttempts > number of lines of tDirList then
+         subtract 1 from gDirectionRecursion
+         put 1 into gRecursiveAttempts
+      end if
+      --- HITS, ie, END OF LINE ARE DETECTED HERE
+      if gDirectionRecursion > 1 then
+         if bClearAtEnd is true then 
+            put true into bFreshGame
+            Init.App
+            exit Game.ExitRunningGame
+         else
+            Game.Restart
+            exit Game.ExitRunningGame
+         end if
+      else
+         put random(width of image "map"),random(height of image "map") into xy
+         put cr & cr & xy after tPoints
+         put 1 into gRecursiveAttempts 
+         put 4 into gDirectionRecursion 
+      end if
+   else
+      
+      put gMaxCounter into gCounter
+   end if 
+   set the foregroundColor the templateGraphic to line (random(number of lines of the ColorNames)) of the colorNames
+   if there is a graphic tGameObjectIndexLabel then set the points of graphic tGameObjectIndexLabel to tPoints
+end Game.ExitRunningGame
+
+
+on prop.MemorizeDirections  tGameObjectIndexLabel
+   put number of items of gAvailableDirections into N
+   do "put the Directions"& N &&"of this stack into tDirList"
+   put cr & line -1 of the points of graphic tGameObjectIndexLabel after tDirList
+   filter lines of tDirlist without empty
+   do "set the Directions"& N &&"of this stack to tDirList" 
+end  prop.MemorizeDirections
+
+
+on GameObject.RandomMove tGameObjectIndexLabel
+   -- Call the LookAround function to determine available directions
+   put LookAround(tGameObjectIndexLabel) into gAvailableDirections 
+   
+   -- If no available directions, exit the game
+   if gAvailableDirections is empty then
+      Game.ExitRunningGame tGameObjectIndexLabel
+      exit GameObject.RandomMove
+   end if
+   
+   -- Count the number of available directions
+   put number of items of gAvailableDirections into tNumberOfDirections
+   
+   -- Choose a random direction from the available ones
+   put random(tNumberOfDirections) into directionItem
+   
+   -- Memorize the chosen direction
+   prop.MemorizeDirections tGameObjectIndexLabel
+   
+   -- Retrieve the chosen direction
+   put item directionItem of gAvailableDirections into tNewDirection
+   
+   -- Initialize direction variables
+   put 0 into dirX
+   put 0 into dirY
+   
+   -- Determine the X and Y components of the chosen direction
+   switch tNewDirection
+      case 1
+         put -1 into dirY -- Up
+         break
+      case 2
+         put 1 into dirY -- Down
+         break
+      case 3
+         put -1 into dirX -- Left
+         break
+      case 4
+         put 1 into dirX -- Right
+         break
+   end switch
+   
+   -- Call LookAround again to check if the chosen direction is still available
+   put LookAround(tGameObjectIndexLabel) into gAvailableDirections 
+   
+   -- If the chosen direction is no longer available, reset direction variables and try again
+   if tNewDirection is not among the items of gAvailableDirections then 
+      put 0 into dirX
+      put 0 into dirY
+      -- Retry the random move after a delay
+      send GameObject.RandomMove && tGameObjectIndexLabel to this stack in 30 milliseconds
+   else
+      
+   end if
+end GameObject.RandomMove
+
+
+on GameObject.RandomDoodle tGameObjectIndexLabel
+   put LookAround(tGameObjectIndexLabel) into gAvailableDirections 
+   if gAvailableDirections is empty then
+      if the tool is "browse tool" then
+         add 1 to gRecursiveAttempts
+         put the points of graphic tGameObjectIndexLabel into tPoints
+         put cr & cr & line gRecursiveAttempts of tPoints into tNewPoints
+         set the points of graphic tGameObjectIndexLabel to tpoints
+         if gRecursiveAttempts > 22 then
+            --set the visitedrects of graphic "bike" to empty
+            --choose "pointer tool"
+            exit GameObject.RandomDoodle
+         end if
+         
+         put 0 into gCounter
+         
+         put cr & cr & screenCenter()  after tPoints
+         set the points of graphic tGameObjectIndexLabel to tpoints
+      else
+         put gMaxCounter into gCounter
+      end if 
+      exit GameObject.RandomDoodle
+   end if
+   put random(number of items of gAvailableDirections) into RND
+   put item RND of gAvailableDirections into tNewDirection
+   put 0 into dirX
+   put 0 into dirY
+   switch tNewDirection
+      case 1
+         put -1 into dirY
+         break
+      case 2
+         put 1 into dirY
+         break
+      case 3
+         put -1 into dirX
+         break
+      case 4
+         put 1 into dirX
+         break
+   end switch
+   put LookAround(tGameObjectIndexLabel) into gAvailableDirections 
+   if tNewDirection is not among the items of gAvailableDirections then Game.ValidatePlaying  "GameObject.RandomMove" && tGameObjectIndexLabel
+end GameObject.RandomDoodle
+
+
+on toggle.ClearAtEnd tBool
+   put tBool into bClearAtEnd
+end toggle.ClearAtEnd
+
+--- LIGHTBIKEY OBJECT SCRIPT BELOW ---
+
+--- on ENEMY_self.AIRandomMove 
+-- Call the LookAround function to determine available directions
+put LookAround(short name of me) into gAvailableDirections 
+
+-- If no available directions, exit the game
+if gAvailableDirections is empty then
+   ExitRunningGame
+   exit ENEMY_self.AIRandomMove
+end if
+
+-- Count the number of available directions
+put number of items of gAvailableDirections into tNumberOfDirections
+
+-- Choose a random direction from the available ones
+put random(tNumberOfDirections) into directionItem
+
+-- Memorize the chosen direction
+MemorizeDirections 
+
+-- Retrieve the chosen direction
+put item directionItem of gAvailableDirections into tNewDirection
+
+-- Initialize direction variables
+put 0 into dirX
+put 0 into dirY
+
+-- Determine the X and Y components of the chosen direction
+switch tNewDirection
+   case 1
+      put -1 into dirY -- Up
+      break
+   case 2
+      put 1 into dirY -- Down
+      break
+   case 3
+      put -1 into dirX -- Left
+      break
+   case 4
+      put 1 into dirX -- Right
+      break
+end switch
+
+-- Call LookAround again to check if the chosen direction is still available
+put LookAround(short name of me) into gAvailableDirections 
+
+-- If the chosen direction is no longer available, reset direction variables and try again
+if tNewDirection is not among the items of gAvailableDirections then 
+   put 0 into dirX
+   put 0 into dirY
+   -- Retry the random move after a delay
+   send ENEMY_self.AIRandomMove to this me in 30 milliseconds
+end if
+end ENEMY_self.AIRandomMove
+
+on ENEMY_self.floodFill 
+   -- Set the random seed for pseudo-random number generation
+   set the randomSeed to the seconds - (random(the seconds))
+   
+   -- Increment the counter
+   add 1 to gCounter
+   
+   -- Calculate half of the grid space for convenience
+   put gGridSpace / 2 into halfspace
+   
+   -- Retrieve the points of the graphic "bike"
+   put the points of graphic short name of me into tPoints
+   
+   -- Filter out any empty lines from tPoints
+   filter lines of tPoints without empty
+   
+   -- Retrieve the current position of the bike
+   put line -1 of tPoints into curXY
+   
+   -- Move the bike according to the current direction
+   add dirX * gGridSpace to item 1 of curXY
+   add dirY * gGridSpace to item 2 of curXY
+   
+   -- Append the new position to the points of the bike
+   put cr & curXY after tPoints
+   
+   -- Display debug information about the flood fill process
+   --put "FloodFill:" && item 1 of curXY & "," & item 2 of curXY & "," & gGridSpace & "," & gGridSpace
+   
+   -- Retrieve the visited rectangles of the bike
+   put the visitedrects of graphic short name of me into visList
+   
+   -- Check if the next grid vector has been visited in some direction
+   filter lines of visList with curXY
+   
+   -- If the next grid vector has been visited, make a random move
+   if visList is not empty then
+      AIRandomMove short name of me
+   else
+      -- Check if the new position is within the game map boundaries
+      if line -1 of tPoints is within gMapRect then
+         -- Move the bike to the new position
+         set the points of graphic me to tPoints
+         
+         -- Update the visited rectangles list
+         put the visitedrects of graphic me into visList
+         put cr & curXY after visList
+         set the visitedrects of graphic me to visList
+         
+         -- Randomly decide whether to make another random move
+         if random(50) > random(100) then
+            AIRandomMove short name of me
+         end if
+         
+         -- Update the counter display
+         --set the label of button "counter" to gCounter
+      end if
+   end if
+   
+   -- Check if the counter is less than the maximum counter value
+   if gCounter < gMaxCounter then
+      -- Schedule another flood fill iteration
+      send floodFill to me in 10 milliseconds
+   end if
+end ENEMY_self.floodFill
+
+on GameObject.Activate
+   ENEMY_self.AIRandomMove 
+   ENEMY_self.floodfill 
+end GameObject.Activate
+---
